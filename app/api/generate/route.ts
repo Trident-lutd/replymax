@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildReply, type Tone } from '@/lib/reply';
+import { buildReply, type Tone } from '../../../lib/reply';
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 
