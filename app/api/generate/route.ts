@@ -30,11 +30,48 @@ function normalizeConfidence(value: unknown) {
   return Math.max(1, Math.min(100, Math.round(num)));
 }
 
+function getSystemPrompt(tone: Tone) {
+  const toneInstructions =
+    tone === "playful"
+      ? "Make it witty, light, and flirt-aware. Use a little charm. Do not become cheesy or cringe."
+      : tone === "direct"
+      ? "Make it concise, clean, and assertive. No fluff. No overexplaining."
+      : "Make it self-assured, attractive, and socially calibrated. Calm, not needy.";
+
+  return `
+You are writing ONE high-quality dating-app or texting reply.
+
+Your output must:
+- directly respond to the latest message
+- clearly reflect the requested tone
+- sound human and sendable
+- usually be one sentence, occasionally two
+- avoid generic filler
+- avoid robotic phrasing
+- avoid sounding needy, try-hard, or overly polite
+- move the conversation forward
+
+Tone instructions:
+${toneInstructions}
+
+Return STRICT JSON only in this shape:
+{
+  "reply": "string",
+  "why": "string",
+  "confidence": 0,
+  "tone": "confident" | "playful" | "direct"
+}
+`;
+}
+
 export async function POST(req: NextRequest) {
+  let conversation = "";
+  let tone: Tone = "confident";
+
   try {
     const body = await req.json();
-    const conversation = String(body?.conversation || "").trim();
-    const tone = (body?.tone || "confident") as Tone;
+    conversation = String(body?.conversation || "").trim();
+    tone = (body?.tone || "confident") as Tone;
 
     if (!conversation) {
       return NextResponse.json(
@@ -55,48 +92,20 @@ export async function POST(req: NextRequest) {
 
     const client = new OpenAI({ apiKey });
 
-    const systemPrompt = `
-You are writing a SINGLE high-quality dating-app or texting reply.
-
-Your job:
-- Read the conversation carefully.
-- Focus especially on the OTHER PERSON'S most recent message.
-- Generate a reply that DIRECTLY addresses that message.
-- The reply must feel natural, human, and actually sendable.
-- Keep it short: usually 1 sentence, sometimes 2.
-- Avoid generic filler, vague motivational language, and awkward "AI-sounding" phrasing.
-- Do not sound needy.
-- Do not sound manipulative or creepy.
-- Do not over-explain.
-- Do not ignore the actual conversation.
-- If the other person is flaky, respond calmly and self-respectfully.
-- If they are positive, move things forward.
-- If the chat is flat, create chemistry or momentum.
-
-Return STRICT JSON only in this shape:
-{
-  "reply": "string",
-  "why": "string",
-  "confidence": 0,
-  "tone": "confident" | "playful" | "direct"
-}
-`;
-
-    const userPrompt = `
-Tone requested: ${tone}
+    const completion = await client.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature: tone === "playful" ? 1 : 0.8,
+      messages: [
+        { role: "system", content: getSystemPrompt(tone) },
+        {
+          role: "user",
+          content: `Requested tone: ${tone}
 
 Conversation:
 ${conversation}
 
-Write the best next reply.
-`;
-
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
-      temperature: 0.9,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+Write the single best next reply.`,
+        },
       ],
       response_format: { type: "json_object" },
     });
@@ -106,12 +115,13 @@ Write the best next reply.
       JSON.stringify(buildFallbackReply(conversation, tone));
 
     const parsed = JSON.parse(cleanJsonBlock(raw));
+    const fallback = buildFallbackReply(conversation, tone);
 
     const response: GenerateResponse = {
-      reply: String(parsed.reply || "").trim() || buildFallbackReply(conversation, tone).reply,
+      reply: String(parsed.reply || "").trim() || fallback.reply,
       why:
         String(parsed.why || "").trim() ||
-        "This reply was chosen to match the tone of the conversation and directly address the last message.",
+        fallback.why,
       confidence: normalizeConfidence(parsed.confidence),
       tone:
         parsed.tone === "playful" || parsed.tone === "direct" || parsed.tone === "confident"
@@ -124,21 +134,11 @@ Write the best next reply.
   } catch (error) {
     console.error("Generate route error:", error);
 
-    try {
-      const reqBody = await req.json().catch(() => null);
-      const conversation = String(reqBody?.conversation || "").trim();
-      const tone = (reqBody?.tone || "confident") as Tone;
+    const fallback = buildFallbackReply(conversation, tone);
 
-      const fallback = buildFallbackReply(conversation, tone);
-      return NextResponse.json<GenerateResponse>({
-        ...fallback,
-        source: "fallback",
-      });
-    } catch {
-      return NextResponse.json(
-        { error: "Unable to generate reply right now." },
-        { status: 500 }
-      );
-    }
+    return NextResponse.json<GenerateResponse>({
+      ...fallback,
+      source: "fallback",
+    });
   }
 }

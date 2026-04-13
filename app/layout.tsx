@@ -25,6 +25,9 @@ export default function RootLayout({
             </div>
 
             <div className="flex flex-wrap gap-4">
+              <Link href="/" className="hover:text-white">
+                Home
+              </Link>
               <Link href="/terms" className="hover:text-white">
                 Terms
               </Link>
